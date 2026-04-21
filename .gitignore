@@ -1,0 +1,22 @@
+# --- Arduino & Embedded Junk ---
+# אל תעלה קבצים שנוצרים בזמן קומפילציה
+build/
+bin/
+*.elf
+*.hex
+*.o
+*.d
+*.a
+
+# --- OS Junk ---
+Thumbs.db
+.DS_Store
+
+# --- Web & Node Junk ---
+node_modules/
+.env
+
+# --- Documentation ---
+# קבצים גדולים שלא צריכים להיות בגרסאות הקוד
+*.pptx
+*.pdf
