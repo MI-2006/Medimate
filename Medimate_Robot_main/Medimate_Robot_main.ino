@@ -23,25 +23,63 @@ SensorData sensors[NUM_SENSORS] = {
     {32, 33, 0, 0, false}, // חיישן 2: Trig=32, Echo=33 
     {5,  18, 0, 0, false}  // חיישן 3: Trig=5, Echo=18 
 };
+// נתונים למניעת התנגשות בין הדלקת הרובוט לבקשה מהשרת
+unsigned long robotStartTime; 
+bool isServerReady = false;
+const unsigned long SERVER_BOOT_DELAY = 30000; // 30 שניות המתנה לשרת
+
+unsigned long lastCameraTime = 0;           // שומר את הזמן של הצילום האחרון
+const unsigned long CAMERA_INTERVAL = 5000; // כל כמה זמן לצלם (במילי-שניות)
 
 void setup() {
     // פתיחת ערוץ תקשורת טורית במהירות גבוהה כדי שההדפסות לא יעכבו את המעבד
     Serial.begin(115200);
+
+    //הגדרת התקשורת של המצלמה
+    Serial2.begin(115200, SERIAL_8N1, 16, 21); 
     
     // קריאה לפונקציית האתחול שנמצאת בלשונית השנייה 
     initUltrasonic();
     
     //RAM שומר את המחרוזת בזיכרון ה-פלאש (קבוע) במקום ב
-    Serial.println(F("System Status: MULTI_ULTRASONIC_INITIALIZED (TABS BUILD)"));
+    Serial.println(F("System Status: MULTI_ULTRASONIC_INITIALIZED (TABS BUILD)+ Camera Link"));
 
     //הפעלת נורות הלד-העין 
     setupEye();
+
+    // שמירת זמן ההדלקה
+    robotStartTime = millis();
 }
 
 void loop() {
     // קריאה למתזמן החיישנים בכל מחזור. הפונקציה הזו לא חוסמת את המעבד.
     runUltrasonicScheduler();
 
+    // בדיקה: האם עבר מספיק זמן והאם המצלמה צריכה לפעול?
+    if (!isServerReady) {
+        if (millis() - robotStartTime > SERVER_BOOT_DELAY) {
+            isServerReady = true;
+            Serial.println("Server should be awake. Enabling camera triggers.");
+        }
+    }
+    // הפעלת המצלמה רק אם השרת מוכן
+    if (isServerReady) {
+        static unsigned long lastCaptureTime = 0;
+        if (millis() - lastCaptureTime > 10000) { // צילום כל 10 שניות
+            lastCaptureTime = millis();
+            Serial2.print('C'); 
+        }
+    }
+    
+    // קבלת תשובות מהמצלמה 
+    checkCameraResponse();
+}
+
+    // לוגיקת המצלמה: קבלת התשובה מהענן (אם הגיעה)
+    if (Serial2.available() > 0) {      // אם יש נתונים שמחכים בערוץ של המצלמה
+        String cloudResponse = Serial2.readStringUntil('\n'); // קריאת התשובה עד סוף השורה
+        processDecision(cloudResponse); // העברת התשובה לפונקציית קבלת ההחלטות
+    }
     // לולאת סריקה: עוברת על כל 4 החיישנים לבדוק אם מישהו מהם סיים למדוד
     for (uint8_t i = 0; i < NUM_SENSORS; i++) {
         
@@ -63,9 +101,11 @@ void loop() {
                 Serial.print(F("OBSTACLE AT ")); 
                 Serial.print(dist); 
                 Serial.println(F(" cm!"));
+
             }
         }
     }
+    
     delay(500);
 }
 //כאשר מנועים מקבלים פקודה לזוז, קרא ל- updateEyeState(true);
