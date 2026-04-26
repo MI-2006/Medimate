@@ -55,21 +55,24 @@ void loop() {
     // קריאה למתזמן החיישנים בכל מחזור. הפונקציה הזו לא חוסמת את המעבד.
     runUltrasonicScheduler();
 
-    // בדיקה: האם עבר מספיק זמן והאם המצלמה צריכה לפעול?
-    if (!isServerReady) {
-        if (millis() - robotStartTime > SERVER_BOOT_DELAY) {
-            isServerReady = true;
-            Serial.println("Server should be awake. Enabling camera triggers.");
+    if (millis() > 30000) { // רק אחרי 30 שניות שהרובוט באוויר
+        // בדיקה: האם עבר מספיק זמן והאם המצלמה צריכה לפעול?
+        if (!isServerReady) {
+            if (millis() - robotStartTime > SERVER_BOOT_DELAY) {
+                isServerReady = true;
+                Serial.println("Server should be awake. Enabling camera triggers.");
+            }
+        }
+        // הפעלת המצלמה רק אם השרת מוכן
+        if (isServerReady) {
+            static unsigned long lastCaptureTime = 0;
+            if (millis() - lastCaptureTime > 10000) { // צילום כל 10 שניות
+                lastCaptureTime = millis();
+                Serial2.print('C'); 
+            }
         }
     }
-    // הפעלת המצלמה רק אם השרת מוכן
-    if (isServerReady) {
-        static unsigned long lastCaptureTime = 0;
-        if (millis() - lastCaptureTime > 10000) { // צילום כל 10 שניות
-            lastCaptureTime = millis();
-            Serial2.print('C'); 
-        }
-    }
+}
     
     // קבלת תשובות מהמצלמה 
     checkCameraResponse();

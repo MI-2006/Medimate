@@ -12,7 +12,7 @@ void drawHeartbeat(bool success) {
     tft.fillCircle(300, 20, 5, color); // עיגול קטן בפינה הימנית העליונה
 }
 // ==========================================
-//               פונקציות מסך   
+//                 פונקציות מסך   
 // ==========================================
 //אתחול המסך
 void setupDisplay() {
@@ -66,26 +66,32 @@ void updateDisplay(int volume, bool isAway) {
     tft.fillRect(280, 150, 40, 30, GRAY); // כפתור פלוס
     tft.setCursor(292, 155); tft.print("+");
   
-    // כפתור לשינוי סטטוס (מתחת לפס הווליום)
-    tft.fillRect(20, 200, 280, 30, NAVY);
-    tft.setCursor(80, 207);
+    // כפתור לשינוי סטטוס (חצי שמאלי)
+    tft.fillRect(20, 200, 130, 30, NAVY);
+    tft.setCursor(40, 207);
     tft.setTextSize(2);
     tft.setTextColor(WHITE);
-    tft.print("TOGGLE STATUS");
-}
+    tft.print("TOGGLE");
+
+    // כפתור הוספת טביעת אצבע (חצי ימני)
+    tft.fillRect(160, 200, 140, 30, DARKGREEN); // ירוק כהה
+    tft.setCursor(170, 207);
+    tft.print("ADD FINGER");
+
     // עדכון הזיכרון
     lastVolume = volume;
     lastAway = (int)isAway;
   }
-  // בדיקה: האם עברו יותר מ-30 שניות מאז הסנכרון האחרון?
-    bool isDataFresh = (millis() - lastSuccessfulSync < 30000);
-    
-    drawHeartbeat(isDataFresh);
 
-    if (!isDataFresh) {
-        tft.setTextColor(RED);
-        tft.setTextSize(1);
-        tft.setCursor(220, 30);
-        tft.print("OFFLINE");
-    }
+  // בדיקה: האם עברו יותר מ-30 שניות מאז הסנכרון האחרון?
+  bool isDataFresh = (millis() - lastSuccessfulSync < 30000);
+    
+  drawHeartbeat(isDataFresh);
+
+  if (!isDataFresh) {
+      tft.setTextColor(RED);
+      tft.setTextSize(1);
+      tft.setCursor(220, 30);
+      tft.print("OFFLINE");
+  }
 }

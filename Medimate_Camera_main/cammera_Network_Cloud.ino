@@ -2,8 +2,8 @@
 const char* WIFI_SSID = "YOUR_WIFI_NAME";
 const char* WIFI_PASS = "YOUR_WIFI_PASS";
 
-// כתובת שרת הפייתון העתידי שלך (נשנה לכתובת האמיתית כשתבני אותו)
-String SERVER_URL = "http://192.168.1.100:5000/upload";
+// כתובת שרת הפייתון
+String SERVER_URL = "https://medimate-backend-j00y.onrender.com";
 
 void initWiFi() {
   // פקודה להתחברות לראוטר
