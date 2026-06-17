@@ -15,7 +15,7 @@ extern const uint32_t THRESHOLD_WARNING_MINUTES;
 extern const uint32_t THRESHOLD_SEVERE_MINUTES;
 
 IntakeStatus calculate_Intake_Status(uint32_t original_taking, uint32_t actual_taking);
-void setupTime();
+bool setupTime();
 void setupServer();
 
 #endif

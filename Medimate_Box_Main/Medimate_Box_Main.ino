@@ -20,8 +20,8 @@ String USER_PASSWORD = "123456";
 String idToken = "";
 
 //חיבור לאינטרנט
- const char* ssid ="Kita-5";//"Hots"; ;
-const char* password ="Xnhbrrfxho";// "0548105650";
+ const char* ssid ="Hots"; //"Kita-5";
+const char* password ="0548105650";//"Xnhbrrfxho";// 
 //משתנה שיראה אם אנחנו מחוברים לאינטרנט
 unsigned long lastSuccessfulSync = 0; // זמן הסנכרון האחרון במילי-שניות
 
@@ -69,6 +69,9 @@ QueueHandle_t appMessageQueue;
   void updateBoxStatus(String id, int currentVolume, bool isUserAway);
   String getUserLinkedBox(String uId);
   void getAndPrintBoxData(String id);
+// הצהרה מוקדמת על פונקציות ניהול זמן ושרת 
+bool setupTime(); 
+void setupServer();
 
   //הצגת הווליום על המסך
   unsigned long lastUpdate = 0;
@@ -78,99 +81,122 @@ QueueHandle_t appMessageQueue;
   extern int lastVolume;
   extern int lastAway;
 
-void setup(){
+// Hardware_Actuators.ino — public API forward declarations
+void setupHardwareActuators();
+void runStateMachine();
+void triggerAlarm(uint8_t compartmentId);
+void openCompartment(uint8_t compId);
 
+void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  // הדלקת המסך
+  // 1. אתחול מסך
   Serial.println("Starting TFT...");
   setupDisplay();
   Serial.println("TFT Started.");
 
-  //נסיון התחברות לאינטרנט
+  // 2. חיבור ל-WiFi
   Serial.println("\nConnecting to WiFi...");
   WiFi.begin(ssid, password); 
-  //קובעים לבקר חסם עליון לנסיון להתחברות
-  //כדי שלא יתקע לנצח בחיפוש אחר חיבור לאינטרנט
+  
   int timeout_counter = 0;
   while (WiFi.status() != WL_CONNECTED && timeout_counter < 20) {
     delay(1000);
     Serial.print(".");
     timeout_counter++;
   }
-  //בדיקה למה יצאנו מהלולאה
+
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\nConnected!");
-    //ברגע שיש אינטרנט, מתחברים עם אימייל וסיסמה 
     authenticateUser();
+    
+    // קריאה לפונקציית הזמן המשוכתבת ובדיקת הצלחה
+    if (setupTime()) {
+       Serial.println("System clock is accurate.");
+    } else {
+       Serial.println("Warning: System clock is inaccurate. Alarms might be delayed.");
+    }
   } else {
-    Serial.println("\nFailed to connect. Status code: ");
-    //מחזיר את סוג השגיאה
-    Serial.println(WiFi.status()); }
-  // סטטוס 4 = WL_CONNECT_FAILED, סטטוס 6 = WL_DISCONNECTED
+    Serial.println("\nFailed to connect.");
+  }
 
-
-
-  //בדיקה איזה קופסה משויכת למשתמש הזה
+  // 3. הגדרת קופסה ופיירבייס
   String linkedBox = getUserLinkedBox(currentUserId);
   Serial.println("User is linked to Box ID: " + linkedBox);
-  //אם מצאנו קופסה, נעדכן אותה
+  
   if (linkedBox != "") {
-    Serial.println("--- Step B: Updating Box Status ---");
-    // נעדכן שהווליום הוא 90 והמשתמש נמצא בבית (false)
-    updateBoxStatus(linkedBox, 90, false); 
+    updateBoxStatus(linkedBox, 90, false);
   } else {
     Serial.println("Error: No linked box found.");
   }
-  // קריאה לפונקציה החדשה כדי להדפיס את מצב הקופסה
   getAndPrintBoxData(linkedBox);
 
-  // אתחול התקשורת הטורית לחיישן
+  // 4. אתחול חיישן טביעת אצבע (על Serial2)
   mySerial.begin(57600, SERIAL_8N1, 16, 17);
-  finger.begin(57600);
-  
-  // בדיקה אם החיישן מגיב
-  if (finger.verifyPassword()) {
-    Serial.println("Found fingerprint sensor!");
-  } else {
-    Serial.println("Did not find fingerprint sensor :(");
-  }
+  setupFingerprint(); // קריאה לפונקציית האתחול שגם מעדכנת את הדגל!
 
+  // 5. אתחול חומרה חדשה (PIR, MP3, Servo Mock)
+  setupHardwareActuators();
 }
 
 void loop() {
-  // קריאת נתונים מהענן - רץ רק פעם ב-10 שניות
+  // מכונת המצבים: רצה בכל מחזור, חוזרת מיד כשהמצב הוא IDLE
+  runStateMachine();
+
+  // 1. קריאת נתונים מהענן - רץ פעם ב-10 שניות
   if (millis() - lastUpdate >= updateInterval) {
     lastUpdate = millis();
-    // שליפת הנתון המעודכן מהענן ועדכון המסך
     getAndPrintBoxData(linkedBoxId); 
   } 
 
-  //. בדיקת נגיעה במסך - רץ בכל מחזור של הלופ
-  if (tft.touched()) {  
-    // הוסף: חובה לקרוא לפונקציה הזו כדי לעדכן את הקואורדינטות
-    tft.readTouch(); 
-    //קריאת המיקום מתוך המשתנים הפומביים של המחלקה
-    int touchX = tft.xTouch; 
-    int touchY = tft.yTouch;  
-
-    // בדיקה: האם לחצו על כפתור ה"פלוס"? (לפי הקואורדינטות שציירנו)
-    if (touchX > 280 && touchX < 320 && touchY > 150 && touchY < 180) {
-       int newVol = constrain(lastVolume + 10, 0, 100);
-       Serial.println("Volume Up Pressed!");
-       updateBoxStatus(linkedBoxId, newVol, (bool)lastAway);
-       delay(300); // Debounce - מניעת לחיצות כפולות
+  // 2. סימולציה של קבלת פקודה מהאפליקציה דרך הסריאל מוניטור
+  if (Serial.available() > 0) {
+    char incomingChar = Serial.read();
+    
+    // אם הקלדנו 'E' או 'e' נתחיל תהליך למידת אצבע
+    if (incomingChar == 'E' || incomingChar == 'e') {
+       Serial.println("\n--- App Command Received: ENROLL FINGERPRINT ---");
+       
+       // מבקשים מהחיישן לדעת כמה אצבעות כבר שמורות אצלו כדי למצוא ID פנוי
+       finger.getTemplateCount();
+       uint8_t nextId = finger.templateCount + 1; 
+       
+       // שינוי תצוגת המסך להדרכת המשתמש
+       tft.fillScreen(BLACK);
+       tft.setCursor(20, 100);
+       tft.setTextColor(YELLOW);
+       tft.setTextSize(2);
+       tft.println("Place finger on sensor");
+       
+       // קריאה לפונקציית הלמידה שכתבנו
+       bool success = enrollNewFingerprint(nextId);
+       
+       // חיווי סופי על המסך
+       tft.fillScreen(BLACK);
+       tft.setCursor(20, 100);
+       if (success) {
+           tft.setTextColor(GREEN);
+           tft.println("Finger Added!");
+       } else {
+           tft.setTextColor(RED);
+           tft.println("Failed!");
+       }
+       
+       // השהיה קצרה לקריאת ההודעה
+       delay(2000); 
+       
+       // טריק: מאפסים את הזיכרון כדי לאלץ את המערכת לצייר את המסך הראשי מחדש
+       lastVolume = -1; 
     }
 
-    // בדיקה: האם לחצו על כפתור ה-Toggle?
-    if (touchX > 20 && touchX < 300 && touchY > 200 && touchY < 230) {
-       bool newAway = !lastAway;
-       Serial.println("Toggle Status Pressed!");
-       updateBoxStatus(linkedBoxId, lastVolume, newAway);
-       delay(300); // Debounce
+    // אם נקליד 'A' (Alarm), נזריק אזעקה מזויפת לתא מספר 1
+    if (incomingChar == 'A' || incomingChar == 'a') {
+        Serial.println("\n--- Debug Command: TRIGGERING FAKE ALARM ---");
+        triggerAlarm(1); 
     }
+
   }
- //wakeUpServer(); //Render  כשאקרא לרובוט לא לשכוח לקרוא לפונקציה שמעירה את השרת ב-
 
+  //wakeUpServer(); 
 }

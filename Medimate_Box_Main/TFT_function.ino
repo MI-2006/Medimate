@@ -5,8 +5,7 @@
 int lastVolume = -1; 
 int lastAway = -1; // משתמשים ב-int במקום bool כדי לאפשר ערך "לא ידוע" התחלתי
 // יצירת מופע של המסך
-tft9341touch tft = tft9341touch(5, 4, 15, 13); 
-//אלמנט שייצור דופק של חיבור אינטרנטי
+tft9341touch tft = tft9341touch(5, 4);//אלמנט שייצור דופק של חיבור אינטרנטי
 void drawHeartbeat(bool success) {
     uint16_t color = success ? GREEN : RED;
     tft.fillCircle(300, 20, 5, color); // עיגול קטן בפינה הימנית העליונה
@@ -59,24 +58,7 @@ void updateDisplay(int volume, bool isAway) {
     int barWidth = map(volume, 0, 100, 0, 280);
     tft.drawRect(20, 150, 280, 30, WHITE);
     tft.fillRect(20, 150, barWidth, 30, BLUE);
-    // ציור כפתורי ווליום (בצד ימין של פס ההתקדמות)
-    tft.fillRect(230, 150, 40, 30, GRAY); // כפתור מינוס
-    tft.setCursor(242, 155); tft.print("-");
     
-    tft.fillRect(280, 150, 40, 30, GRAY); // כפתור פלוס
-    tft.setCursor(292, 155); tft.print("+");
-  
-    // כפתור לשינוי סטטוס (חצי שמאלי)
-    tft.fillRect(20, 200, 130, 30, NAVY);
-    tft.setCursor(40, 207);
-    tft.setTextSize(2);
-    tft.setTextColor(WHITE);
-    tft.print("TOGGLE");
-
-    // כפתור הוספת טביעת אצבע (חצי ימני)
-    tft.fillRect(160, 200, 140, 30, DARKGREEN); // ירוק כהה
-    tft.setCursor(170, 207);
-    tft.print("ADD FINGER");
 
     // עדכון הזיכרון
     lastVolume = volume;

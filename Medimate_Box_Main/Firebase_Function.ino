@@ -2,6 +2,9 @@
 //          מנוע התקשורת (Firebase Engine)
 // ==================================================
 
+// הצהרה מוקדמת — מוגדר ב-Hardware_Actuators.ino
+void triggerAlarm(uint8_t compartmentId);
+
 //  הפונקציה 1: אימות משתמש מול Firebase 
 void authenticateUser() {
   if (WiFi.status() != WL_CONNECTED) return;
@@ -141,6 +144,27 @@ void getAndPrintBoxData(String id) {
         Serial.println("JSON Parsed successfully.");
         // קריאה אחת בלבד לשכבת התצוגה
         updateDisplay(volumeVal, isAway);
+
+        // ── בדיקת לוח הזמנים לנטילת תרופה ──────────────────────────────────
+        // שדות Firebase הנדרשים במסמך הקופסה:
+        //   "nextDoseEpoch"       (integerValue) — חותמת זמן Unix של המנה הבאה
+        //   "nextDoseCompartment" (integerValue) — מספר התא: 1 עד 5
+        // שני השדות אופציונליים — מוגנים עם containsKey() לבטיחות.
+        if (fields.containsKey("nextDoseEpoch") &&
+            fields.containsKey("nextDoseCompartment")) {
+
+          time_t nextDoseEpoch = (time_t)fields["nextDoseEpoch"]["integerValue"].as<long>();
+          uint8_t nextComp     = (uint8_t)fields["nextDoseCompartment"]["integerValue"].as<int>();
+          time_t  nowEpoch     = time(nullptr); // תקף לאחר קריאת setupTime() ב-setup()
+
+          // חלון טריגר: המנה בזמן אם נמצאים בטווח של 60 שניות מהזמן המתוזמן
+          long diff = (long)(nowEpoch - nextDoseEpoch);
+          if (diff >= 0 && diff <= 60) {
+            Serial.printf("זמן מנה! הפעלת אזעקה עבור תא %d\n", nextComp);
+            triggerAlarm(nextComp); // מוגדר ב-Hardware_Actuators.ino
+          }
+        }
+        // ─────────────────────────────────────────────────────────────────────
       }
     }
   }

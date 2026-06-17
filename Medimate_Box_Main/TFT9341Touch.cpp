@@ -1,4 +1,4 @@
-/*  last update 20/09/24 */
+ //CDDDEWGG/*  last update 20/09/24 */
 /*  Avi Hayun */
 
 #include "tft9341touch.h"
@@ -251,11 +251,11 @@ void tft9341touch::begin()
 	else
 		color_gamma(3);
 
-	if (touched()) {
-		print("press to set");
-		cal();
-		while (1);
-	}
+	// if (touched()) {
+	// 	print("press to set");
+	// 	cal();
+	// 	while (1);
+	// }
 }
 
 // all display one color

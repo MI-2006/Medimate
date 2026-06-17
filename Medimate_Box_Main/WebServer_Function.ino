@@ -30,23 +30,31 @@ IntakeStatus calculate_Intake_Status(uint32_t original_taking, uint32_t actual_t
   return STATUS_SEVERE;
 }
 
-void setupTime() {
+bool setupTime() {
   // אתחול מנגנון הזמן מול שרת ה-NTP
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-//tm התיקון: הצהרה על מבנה נתונים מסוג 
-  // struct tm הוא מבנה השייך לספריית time.h ומכיל שדות כמו tm_hour, tm_min וכו'.
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer); 
+  
   struct tm timeinfo; 
-
   Serial.println("Waiting for NTP time sync...");
 
-  // 3. ניסיון קבלת הזמן
-  // הפונקציה getLocalTime מקבלת מצביע (&) למבנה הנתונים וממלאת אותו
-  while(!getLocalTime(&timeinfo)) {
+  const uint8_t maxAttempts = 15; // מקסימום 15 ניסיונות (7.5 שניות סך הכל)
+  uint8_t currentAttempt = 0;
+
+  // לולאה מוגבלת בזמן - מונעת תקיעה קריטית של מערכת זמן אמת
+  while (!getLocalTime(&timeinfo) && currentAttempt < maxAttempts) {
     Serial.print(".");
-    delay(500);
+    delay(500); // השהייה קצרה בין ניסיונות דגימה 
+    currentAttempt++;
+  }
+
+  // בדיקת סטטוס היציאה מהלולאה
+  if (currentAttempt >= maxAttempts) {
+    Serial.println("\n[ERROR] NTP Synchronization Timeout! Running in offline mode.");
+    return false; // סנכרון נכשל, אך המערכת תמשיך לעבוד
   }
 
   Serial.println("\nTime synchronized successfully!");
+  return true; // סנכרון הצליח
 }
 
 void setupServer() {
