@@ -20,8 +20,8 @@ String USER_PASSWORD = "123456";
 String idToken = "";
 
 //חיבור לאינטרנט
- const char* ssid ="Hots"; //"Kita-5";
-const char* password ="0548105650";//"Xnhbrrfxho";// 
+ const char* ssid ="Kita-5";//"Hots"; //
+const char* password ="Xnhbrrfxho";// "0548105650";//
 //משתנה שיראה אם אנחנו מחוברים לאינטרנט
 unsigned long lastSuccessfulSync = 0; // זמן הסנכרון האחרון במילי-שניות
 
