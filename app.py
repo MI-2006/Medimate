@@ -40,7 +40,9 @@ log = logging.getLogger("medimate")
 # Flask application
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
-
+@app.route('/', methods=['GET'])
+def home():
+    return "MediMate Server is Awake and Running! 🚀"
 # Hard cap on incoming body size: 2 MB.
 # Flask will return HTTP 413 automatically if the client sends more.
 # This is the FIRST line of defence against OOM on the free tier –
@@ -285,6 +287,20 @@ def notifications_call():
 # ===========================================================================
 # ENDPOINT 3 – /api/medical/parse_prescription
 # ===========================================================================
+#
+# This endpoint now performs TWO extraction passes over the OCR text:
+#   1. Medication identification (drug name + dosage) – unchanged strategy.
+#   2. Scheduling heuristics (proposed_schedule) – NEW.
+#
+# The scheduling engine is a pure Regex + arithmetic heuristic layer.
+# No ML model, tokenizer, or vector store is loaded, so the memory delta
+# for this feature is effectively zero – it reuses the same 512 MB budget
+# already allocated to HOG/GCV/Twilio at module import time.
+#
+# Clinical rationale for every rule is documented inline below, since this
+# output is shown to a human caregiver for confirmation before it is ever
+# written to Firebase and used to unlock a physical medication compartment.
+# ---------------------------------------------------------------------------
 
 # Pre-compiled regex patterns for medication extraction.
 # Compiling at module load: re.compile is ~10× faster than inline re.search
@@ -308,6 +324,234 @@ _STOPWORDS = frozenset({
     "Patient", "Doctor", "Prescription", "Name", "Date", "Refill",
 })
 
+# ---------------------------------------------------------------------------
+# Scheduling heuristics – ALL patterns compiled at module scope (never inside
+# the request handler or the helper function) so they are parsed by the
+# regex engine exactly once per process lifetime, not once per request.
+# ---------------------------------------------------------------------------
+
+# Rule 4 – PRN / "as needed" detection.
+# Clinically, a PRN order must NEVER receive a fixed clock-time schedule –
+# doing so would cause the box to alert/dispense on a timer for a medication
+# the patient may not need that day (e.g. PRN pain relief), which is both
+# clinically wrong and erodes the patient's trust in the alerting system.
+_RX_PRN = re.compile(
+    r"\b(?:as\s+needed|p\.?\s*r\.?\s*n\.?|if\s+(?:pain|needed|required))\b",
+    re.IGNORECASE,
+)
+
+# Rule 2 – strict numeric interval dosing (e.g. "Every 8 hours" for antibiotics).
+# These orders are pharmacokinetically driven (trough/peak blood levels), so
+# – unlike "3 times a day" – the interval must be taken LITERALLY rather than
+# redistributed into waking hours, even if that means a 00:00 dose.
+_RX_EVERY_X_HOURS = re.compile(
+    r"every\s+(\d{1,2})\s*(?:h|hr|hrs|hour|hours)\b",
+    re.IGNORECASE,
+)
+
+# Rule 1 – "N times a day" / "once daily" / "twice daily" style frequency.
+# Accepts both digits ("3 times a day") and spelled-out frequency words
+# ("once", "twice", "three times") because OCR of printed labels commonly
+# renders both forms depending on the pharmacy's label template.
+_RX_TIMES_A_DAY = re.compile(
+    r"\b(once|twice|thrice|one|two|three|four|\d{1,2})"
+    r"\s*(?:times?)?\s*(?:a|per)?\s*(?:day|daily)\b",
+    re.IGNORECASE,
+)
+_FREQ_WORD_TO_INT: dict[str, int] = {
+    "once": 1, "one": 1,
+    "twice": 2, "two": 2,
+    "thrice": 3, "three": 3,
+    "four": 4,
+}
+
+# Rule 3 – daily anchor keywords.
+_RX_MORNING = re.compile(r"\bmorning\b", re.IGNORECASE)
+_RX_EVENING = re.compile(r"\b(?:evening|bedtime|night)\b", re.IGNORECASE)
+_RX_WITH_FOOD = re.compile(
+    r"\b(?:with\s+(?:food|meals?)|before\s+meals?|after\s+meals?)\b",
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Scheduling constants.
+#
+# "Waking hours" window (08:00–20:00) is a deliberate clinical/UX choice:
+# distributing N-times-a-day doses mathematically across a full 24h clock
+# (24 / N) would place doses at implausible hours (e.g. 3×/day → 00:00,
+# 08:00, 16:00), waking an elderly patient at midnight. Anchoring the
+# window to typical waking hours keeps every *frequency-based* dose inside
+# hours the patient is realistically awake and near the box.
+# ---------------------------------------------------------------------------
+_WAKING_START_HOUR: float = 8.0   # 08:00
+_WAKING_END_HOUR:   float = 20.0  # 20:00
+_ANCHOR_MORNING:    str = "08:00"
+_ANCHOR_EVENING:    str = "21:00"  # bedtime anchor sits slightly after the
+                                    # waking-hours window, matching typical
+                                    # elderly bedtime routines.
+_MEAL_ANCHORS: tuple[str, str, str] = ("08:00", "13:00", "19:00")
+
+# Sanity clamp: prescriptions requesting more than 6 doses/day are almost
+# always an OCR misread (e.g. a dosage number captured as a frequency), so
+# we clamp rather than generate a schedule that would spam the caregiver.
+_MAX_PLAUSIBLE_DOSES_PER_DAY: int = 6
+
+
+def _format_hhmm(hour_value: float) -> str:
+    """Convert a fractional hour (e.g. 14.5) into a zero-padded 'HH:MM'
+    string, wrapping correctly past midnight (24h clock, modulo 1440 min)."""
+    total_minutes = round(hour_value * 60.0) % (24 * 60)
+    hours, minutes = divmod(total_minutes, 60)
+    return f"{hours:02d}:{minutes:02d}"
+
+
+def _distribute_waking_hours(dose_count: int) -> list[str]:
+    """Spread `dose_count` doses evenly across the 08:00–20:00 waking-hours
+    window (Requirement #1). A single dose is always anchored to 08:00
+    (morning) rather than the window midpoint, matching standard once-daily
+    prescribing convention."""
+    dose_count = max(1, min(dose_count, _MAX_PLAUSIBLE_DOSES_PER_DAY))
+    if dose_count == 1:
+        return [_format_hhmm(_WAKING_START_HOUR)]
+    span_hours = _WAKING_END_HOUR - _WAKING_START_HOUR
+    step_hours = span_hours / (dose_count - 1)
+    return [
+        _format_hhmm(_WAKING_START_HOUR + (i * step_hours))
+        for i in range(dose_count)
+    ]
+
+
+def _distribute_strict_interval(interval_hours: int) -> list[str]:
+    """Compute literal 'every X hours' clock times starting at 08:00
+    (Requirement #2). Number of doses = floor(24 / interval); e.g. every
+    8 hours → 3 doses at 08:00 / 16:00 / 00:00. Unlike _distribute_waking_hours
+    this deliberately DOES roll past midnight, because interval dosing is
+    driven by drug half-life, not patient wakefulness."""
+    interval_hours = max(1, min(interval_hours, 24))
+    dose_count = max(1, 24 // interval_hours)
+    return [
+        _format_hhmm((_WAKING_START_HOUR + (i * interval_hours)) % 24.0)
+        for i in range(dose_count)
+    ]
+
+
+def _resolve_frequency_count(token: str) -> int | None:
+    """Normalize a frequency token ('twice', '3', 'three times') captured by
+    _RX_TIMES_A_DAY into an integer dose count, or None if unrecognized."""
+    token = token.strip().lower()
+    if token.isdigit():
+        return int(token)
+    return _FREQ_WORD_TO_INT.get(token)
+
+
+def parse_schedule_heuristics(ocr_text: str) -> dict:
+    """
+    Derive a proposed daily dosing schedule from free-text prescription
+    instructions using a fixed priority chain of clinical heuristics.
+
+    Priority order (highest → lowest) and the reasoning behind it:
+      1. PRN / as-needed   – MUST short-circuit everything else; a fixed
+                              schedule for an as-needed drug is a safety bug.
+      2. Every X hours      – pharmacokinetic interval dosing overrides
+                              generic frequency wording if both appear
+                              (e.g. "Take twice daily, every 12 hours").
+      3. Morning + Evening  – explicit dual anchor implies BID dosing even
+                              if no numeric frequency was OCR'd.
+      4. N times a day      – generic frequency, redistributed into waking
+                              hours (never a literal 24/N division).
+      5. With food / meals  – anchored to typical meal times.
+      6. Morning only       – single anchor.
+      7. Evening only       – single anchor (bedtime).
+      8. No match           – return an empty schedule rather than guessing;
+                              the caregiver app must prompt for manual entry
+                              instead of silently proposing an unsupported
+                              time (fail-safe default, not fail-silent).
+
+    Args:
+        ocr_text: raw OCR text associated with a single medication line
+                   (the drug's own line plus a small trailing context
+                   window – see parse_prescription()).
+
+    Returns:
+        dict with keys: proposed_schedule (list[str]), is_as_needed (bool),
+        schedule_source (str) – the latter is diagnostic metadata for
+        logging/debugging and is safe for the frontend to ignore.
+    """
+    text_lower = ocr_text.lower()
+
+    # Rule 4 (highest priority) – PRN / as-needed.
+    if _RX_PRN.search(text_lower):
+        return {
+            "proposed_schedule": [],
+            "is_as_needed": True,
+            "schedule_source": "prn",
+        }
+
+    # Rule 2 – strict interval dosing (e.g. antibiotic q8h).
+    every_match = _RX_EVERY_X_HOURS.search(text_lower)
+    if every_match:
+        interval_hours = int(every_match.group(1))
+        return {
+            "proposed_schedule": _distribute_strict_interval(interval_hours),
+            "is_as_needed": False,
+            "schedule_source": "interval",
+        }
+
+    has_morning = bool(_RX_MORNING.search(text_lower))
+    has_evening = bool(_RX_EVENING.search(text_lower))
+
+    # Rule 3 – both morning and evening anchors present → BID schedule.
+    if has_morning and has_evening:
+        return {
+            "proposed_schedule": [_ANCHOR_MORNING, _ANCHOR_EVENING],
+            "is_as_needed": False,
+            "schedule_source": "anchor_morning_evening",
+        }
+
+    # Rule 1 – generic "N times a day" frequency wording.
+    times_match = _RX_TIMES_A_DAY.search(text_lower)
+    if times_match:
+        dose_count = _resolve_frequency_count(times_match.group(1))
+        if dose_count:
+            return {
+                "proposed_schedule": _distribute_waking_hours(dose_count),
+                "is_as_needed": False,
+                "schedule_source": "times_per_day",
+            }
+
+    # Rule 3 (meal variant) – "with food" / "with meals" instructions.
+    if _RX_WITH_FOOD.search(text_lower):
+        return {
+            "proposed_schedule": list(_MEAL_ANCHORS),
+            "is_as_needed": False,
+            "schedule_source": "meals",
+        }
+
+    # Rule 3 (single anchor) – morning only.
+    if has_morning:
+        return {
+            "proposed_schedule": [_ANCHOR_MORNING],
+            "is_as_needed": False,
+            "schedule_source": "anchor_morning",
+        }
+
+    # Rule 3 (single anchor) – evening / bedtime only.
+    if has_evening:
+        return {
+            "proposed_schedule": [_ANCHOR_EVENING],
+            "is_as_needed": False,
+            "schedule_source": "anchor_evening",
+        }
+
+    # Rule 8 – nothing recognized. Fail-safe: leave schedule empty so the
+    # caregiver app forces manual confirmation rather than dispensing at a
+    # clinically-unsupported guessed time.
+    return {
+        "proposed_schedule": [],
+        "is_as_needed": False,
+        "schedule_source": "unrecognized",
+    }
+
 
 @app.route("/api/medical/parse_prescription", methods=["POST"])
 @require_robot_key
@@ -315,7 +559,9 @@ def parse_prescription():
     """
     Receives a prescription image (JPEG/PNG) from the Main Box, sends it to
     Google Cloud Vision TEXT_DETECTION for OCR, then extracts medication
-    names and dosages via regex and returns structured JSON.
+    names, dosages, and a heuristic dosing schedule via regex, returning
+    structured JSON for the caregiver app to confirm before it is written
+    to Firebase.
 
     GCV TEXT_DETECTION vs DOCUMENT_TEXT_DETECTION:
       - TEXT_DETECTION: optimized for sparse, printed text (labels, signs).
@@ -358,37 +604,69 @@ def parse_prescription():
             return jsonify({"medications": [], "raw_text": ""}), 200
 
         full_text: str = response.text_annotations[0].description
+        
+        # --- תיקון: מחיקת המילה Patient ושם המטופל (שתי מילים) מהטקסט הגולמי ---
+        full_text = re.sub(r"(?i)Patient:\s*[A-Za-z]+\s+[A-Za-z]+", "", full_text)
+        
+        log.info("GCV OCR extracted %d characters", len(full_text))
         log.info("GCV OCR extracted %d characters", len(full_text))
 
-        # ── Regex medication extraction ────────────────────────────────────
+        # ── Regex medication + schedule extraction ─────────────────────────
+        # OCR text is processed line-by-line (rather than as one blob) so
+        # that each medication can be paired with the instruction text that
+        # is physically printed nearest to it on the label. Pharmacy labels
+        # typically place dosing instructions on the line immediately
+        # following the drug name/dosage line, so we build a small
+        # 2-line "context window" (current line + next line) per match.
         medications: list[dict] = []
         seen: set[str] = set()  # deduplicate – prescriptions repeat drug names
+        lines: list[str] = full_text.splitlines()
 
-        for match in _RX_DRUG_LINE.finditer(full_text):
-            drug_name: str = match.group(1).strip()
+        for line_index, line in enumerate(lines):
+            for match in _RX_DRUG_LINE.finditer(line):
+                drug_name: str = match.group(1).strip()
 
-            # Filter stopwords and very short matches (< 4 chars are noise)
-            if drug_name in _STOPWORDS or len(drug_name) < 4:
-                continue
+                # Filter stopwords and very short matches (< 4 chars are noise)
+                if drug_name in _STOPWORDS or len(drug_name) < 4:
+                    continue
 
-            # Deduplicate case-insensitively
-            key = drug_name.lower()
-            if key in seen:
-                continue
-            seen.add(key)
+                # Deduplicate case-insensitively
+                key = drug_name.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
 
-            # Extract dosage from the same match group (group 2) or fallback
-            raw_dosage: str = match.group(2) or ""
-            dosage_match = _RX_DOSAGE.search(raw_dosage)
-            dosage_value: float | None = float(dosage_match.group(1)) if dosage_match else None
-            dosage_unit:  str | None  = dosage_match.group(2).lower() if dosage_match else None
+                # Extract dosage from the same match group (group 2) or fallback
+                raw_dosage: str = match.group(2) or ""
+                dosage_match = _RX_DOSAGE.search(raw_dosage)
+                dosage_value: float | None = (
+                    float(dosage_match.group(1)) if dosage_match else None
+                )
+                dosage_unit: str | None = (
+                    dosage_match.group(2).lower() if dosage_match else None
+                )
 
-            medications.append({
-                "name":        drug_name,
-                "dosage_raw":  raw_dosage.strip() or None,
-                "dosage_value": dosage_value,
-                "dosage_unit":  dosage_unit,
-            })
+                # Build the instruction context window: current line plus the
+                # following line (guarded against IndexError at EOF).
+                context_lines = [line]
+                if line_index + 1 < len(lines):
+                    context_lines.append(lines[line_index + 1])
+                instruction_context: str = " ".join(context_lines).strip()
+
+                schedule_info = parse_schedule_heuristics(instruction_context)
+
+                medications.append({
+                    "name": drug_name,
+                    # Human-readable combined dosage string for direct UI display.
+                    "dosage": raw_dosage.strip() or None,
+                    "dosage_raw": raw_dosage.strip() or None,
+                    "dosage_value": dosage_value,
+                    "dosage_unit": dosage_unit,
+                    "proposed_schedule": schedule_info["proposed_schedule"],
+                    "is_as_needed": schedule_info["is_as_needed"],
+                    "schedule_source": schedule_info["schedule_source"],
+                    "instruction_raw_text": instruction_context,
+                })
 
         log.info("Extracted %d medication entries from prescription", len(medications))
 
