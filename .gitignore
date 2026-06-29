@@ -1,22 +1,39 @@
-# --- Arduino & Embedded Junk ---
-# אל תעלה קבצים שנוצרים בזמן קומפילציה
-build/
-bin/
+# --- Arduino / Embedded ---
 *.elf
 *.hex
 *.o
 *.d
 *.a
+*.bin
 
-# --- OS Junk ---
-Thumbs.db
-.DS_Store
+# --- C++ / Visual Studio ---
+.vs/
+bin/
+obj/
+*.suo
+*.user
+*.ipch
+*.idb
+*.pdb
+*.tlog
+*.lastbuildstate
+unsuccessfulbuild
+*.db
+*.db-shm
+*.db-wal
 
-# --- Web & Node Junk ---
+# --- React / Web ---
 node_modules/
+dist/
+build/
+.vite/
+.env.local
 .env
 
-# --- Documentation ---
-# קבצים גדולים שלא צריכים להיות בגרסאות הקוד
-*.pptx
-*.pdf
+# --- IDEs / System ---
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db

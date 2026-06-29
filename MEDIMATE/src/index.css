@@ -235,5 +235,14 @@ input:focus {
 
 }
 
+.safety-alert-pulse {
+  animation: pulse-danger 1.5s infinite cubic-bezier(0.4, 0, 0.6, 1);
+  border: 2px solid #DC2626;
+}
+
+@keyframes pulse-danger {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7); }
+  50% { opacity: 0.8; box-shadow: 0 0 0 15px rgba(220, 38, 38, 0); }
+}
 
 

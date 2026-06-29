@@ -1,7 +1,28 @@
-// פרטי הרשת ך )
+
+const char* WIFI_SSID =  "Hots";        // "Kita-5";
+const char* WIFI_PASS =  "0548105650";  // "Xnhbrrfxho";
+
+// כתובת שרת הפייתון העתידי שלך (נשנה לכתובת האמיתית של Render כשתבני אותו)
+String SERVER_URL = String SERVER_URL = "https://medimate-backend-j00y.onrender.com/upload";
+
 // הגדרת המפתח הסודי - חייב להיות זהה ב-100% למה שכתבת בפייתון!
 // הסבר: זהו ה-Shared Secret. אם תו אחד יהיה שונה (אפילו רווח), השרת יחסום את הבקשה.
 const char* ROBOT_API_KEY = "MediMate_Super_Secret_Key_2026";
+
+void initWiFi() {
+  // פקודה להתחברות לראוטר
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting to WiFi");
+  
+  // לולאה שממתינה עד שהבקר מקבל כתובת IP מהראוטר
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500); // המתנה של חצי שנייה
+    Serial.print("."); // הדפסת נקודה למחשב כדי לראות שמשהו קורה
+  }
+  
+  Serial.println("\nWiFi Connected! IP Address:"); // ירידת שורה והדפסת הצלחה
+  Serial.println(WiFi.localIP()); // הדפסת כתובת ה-IP שקיבלנו מהראוטר
+}
 
 void takeAndSendPicture() {
     // 1. לכידת תמונה מהעדשה ושמירתה ב-PSRAM
